@@ -1,0 +1,1060 @@
+---
+title: "TraitSpace1"
+format: html
+editor: visual
+---
+
+## \[DRAFT\] Analyzing trait space of marine invertebrates in the Canary Islands
+
+This is a draft IRT (Individual Research Training) script exploring the differences in functional trait space between different marine habitats in the Canary Islands. Data is of mobile marine invertebrates from the Reef LIfe Sruvey, collected between 2011 and 2015. This script is based largely on Nestor's script, Trait_space_analysis.R and partially on the mFD workflow tutorial.
+
+#### 1. Read and clean occurrence and trait data
+
+```{r message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(readxl)
+library(mFD)
+
+# Read & clean the occurrence data
+invert_dat <- read.csv("Invert_dat.csv") 
+
+invert_dat <- invert_dat %>%
+  rename(Isla = Location, Species = TAXONOMIC_NAME, Abund=TotalAbundance) %>%
+  dplyr::select(-X, -Method) %>%
+  filter(Species != "") #remove the two blank items in Species
+
+invert_dat <- invert_dat[invert_dat$Species != "Mollusca spp.", ] #taxonomic resolution not specific enough
+
+head(invert_dat)
+
+# Read & clean the trait data
+trait_dat <- read.csv("traitdata2.csv")
+
+trait_dat <- trait_dat %>%
+    dplyr::select(-family, -order, -class, -phylum, -notes, -Abundance)
+
+rownames(trait_dat) <- trait_dat[,1] #Assigning row names from 1st column 
+trait_dat[,1] <- NULL #Remove the first column
+
+head(trait_dat)
+
+# Read & clean habitat data
+
+PQ_dat <- read.csv("PQ_dat.csv") 
+
+PQ_dat <- PQ_dat %>%
+  rename(SurveyID = survey_id, SiteCode = site_code) %>%
+  dplyr::select(-country, -area, -location)
+
+# Now filter invert_dat by transects also included in PQ_dat
+
+invert <- invert_dat %>%
+  semi_join(PQ_dat, by = "SurveyID")
+
+n_distinct(invert_dat$Species) ## 74 unique species
+n_distinct(invert$Species)     ## 67 unique species 
+```
+
+##### 1.2 Quick data overview
+
+```{r}
+n_distinct(PQ_dat$SiteCode) ## 75 sites in PQ_dat
+n_distinct(invert$SiteCode) ## 107 sites in invert_dat
+n_distinct(PQ_dat$SurveyID) ## 131 surveys in PQ_dat
+n_distinct(invert$SurveyID) ## 234 surveys in invert_dat
+
+n_distinct(PQ_dat$RLS_category) ## 28 benthic habitat categories
+unique(PQ_dat$mpa)
+unique(PQ_dat$RLS_category)
+
+ggplot(PQ_dat,aes(x=longitude,y=latitude))+
+  geom_point()+
+  theme_classic()
+```
+
+#### 2. Define each trait type
+
+```{r message=FALSE, warning=FALSE}
+
+library("mFD")
+
+#create dataframe of trait types
+traits_type <- data.frame(
+  trait_name = c("size", "feeding", "defense", "shape", "mobility", "supp.structure"),
+  trait_type = c("Q", "N", "N", "N", "N", "N")) %>%
+  print()
+
+#ensure that all 'nominal" traits are factors
+trait_dat$feeding<-as.factor(trait_dat$feeding)
+trait_dat$defense<-as.factor(trait_dat$defense)
+trait_dat$shape<-as.factor(trait_dat$shape)
+trait_dat$mobility<-as.factor(trait_dat$mobility)
+trait_dat$supp.structure<-as.factor(trait_dat$supp.structure)
+```
+
+#### 3. Summarize trait data
+
+```{r message=FALSE, warning=FALSE}
+
+## Get summaries of trait data
+
+traits_summ <- mFD::sp.tr.summary(
+  tr_cat     = traits_type,
+  sp_tr      = trait_dat, 
+  stop_if_NA = TRUE)
+
+traits_summ$tr_types
+traits_summ$mod_list
+traits_summ$tr_summary_list
+```
+
+#### 4. Compute and assess quality of functional space
+
+```{r message=FALSE, warning=FALSE}
+
+# create distance matrix
+sp_dist <- mFD::funct.dist(
+  sp_tr         = trait_dat,
+  tr_cat        = traits_type,
+  metric        = "gower",
+  scale_euclid  = "scale_center",
+  ordinal_var   = "classic",
+  weight_type   = "equal",
+  stop_if_NA    = TRUE)
+
+# Store a gower distance matrix
+gowmat<-as.matrix(round(sp_dist, 3)) # Output of the function mFD::funct.dist()
+
+## Compute multidimensional spaces and assess its quality
+fspaces_quality <- mFD::quality.fspaces(
+  sp_dist             = sp_dist,
+  maxdim_pcoa         = 10,
+  deviation_weighting = "absolute",
+  fdist_scaling       = FALSE,
+  fdendro             = NULL)
+
+round(fspaces_quality$"quality_fspaces", 3)  # Quality metrics of spaces
+
+```
+
+Based on the 'mad' (mean absolute deviation) scores above, pcoa_6d appears to be the highest quality multidimensional space. However, using the first 4 dimensions is still the most parsimonious choice.
+
+#### 5. Illustrate the quality of the functional spaces
+
+```{r message=FALSE, warning=FALSE}
+
+mFD::quality.fspaces.plot(
+  fspaces_quality            = fspaces_quality,
+  quality_metric             = "mad",
+  fspaces_plot               = c("pcoa_1d","pcoa_2d", "pcoa_3d",
+                                 "pcoa_4d", "pcoa_5d", "pcoa_6d"),
+  name_file                  = NULL,
+  range_dist                 = NULL,
+  range_dev                  = NULL,
+  range_qdev                 = NULL,
+  gradient_deviation         = c(neg = "darkblue", nul = "grey80", pos = "darkred"),
+  gradient_deviation_quality = c(low = "yellow", high = "red"),
+  x_lab                      = "Trait-based distance")
+
+## Export plot 
+
+# setwd("plots.dir")
+# 
+# name<-'Quality_Functional_Space'
+# ggsave(paste(name,".png",sep="."),width = 21, height = 20,units = "cm",dpi=600)
+# ggsave(paste(name,".pdf",sep="."),width = 21, height = 20,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 6. Calculate variance explained by PCO axes
+
+```{r message=FALSE, warning=FALSE}
+
+## Retrieve functional axes
+
+sp_faxes_coord <- fspaces_quality$"details_fspaces"$"sp_pc_coord"
+
+## Calculate how much of the variability in trait data is explain by the first 4 dimensions
+
+library(labdsv)
+
+gow.pco <- pco(gowmat, k=4)
+
+## Calculate the variance explained by PCO axes
+
+eig <- gow.pco$eig
+eig <- subset(gow.pco$eig, gow.pco$eig >0)
+var <- eig/sum(eig)
+sum(var)
+
+var[1] #PCO1
+var[2] #PCO2
+var[3] #PCO3
+var[4] #PCO4
+
+sum(var[1:4]) #FIRST 4 AXES
+```
+
+Together, the first 4 axes explain 74% of variability. PCO1 explains 30.8%, PCO2 explains 19.8%, PCO3 explains 12.9%, and PCO4 explains 10.6%. PCO5 and 5 explain very little of the variability, so we use only the first 4 axes.
+
+#### 7.Calculate correlations between traits and PCoA Axes
+
+```{r message=FALSE, warning=FALSE}
+
+## For non-continous traits - Krustal Wallis test & eta2 statistic returned
+
+corr_tr <- mFD::traits.faxes.cor(
+  sp_tr          = trait_dat[1:6], 
+  sp_faxes_coord = sp_faxes_coord[ , c("PC1", "PC2", "PC3", "PC4")], 
+  plot           = TRUE)
+
+# Print traits with significant effect:
+
+test.A<-as.data.frame(corr_tr$"tr_faxes_stat"[which(corr_tr$"tr_faxes_stat"$"p.value" < 0.05), ])
+
+head(test.A)
+
+```
+
+Size and feeding behavior are the only traits with a statistically significant effect.
+
+#### 8.Visualize correlations between traits and PCO axes
+
+To make the x-axis more legible, we will make three plots representing two traits each.
+
+##### Figure A
+
+```{r message=FALSE, warning=FALSE}
+
+library(ggpubr)
+
+a<-corr_tr$"tr_faxes_plot"[[1]]
+b<-corr_tr$"tr_faxes_plot"[[2]]
+
+ggarrange(a,b,nrow = 1,ncol=2,align = "hv")
+
+## Export plot 
+
+# setwd("plots.dir.2")
+# 
+# name<-'Traits_Correlations_A'
+# ggsave(paste(name,".png",sep="."),width = 21, height = 15,units = "cm",dpi=600)
+# ggsave(paste(name,".pdf",sep="."),width = 21, height = 15,units = "cm",dpi=600,useDingbats=FALSE)
+```
+
+##### Figure B
+
+```{r message=FALSE, warning=FALSE}
+
+a<-corr_tr$"tr_faxes_plot"[[3]]
+b<-corr_tr$"tr_faxes_plot"[[4]]
+
+ggarrange(a,b,nrow = 1,ncol=2,align = "hv")
+
+## Export plot 
+
+# setwd("plots.dir.2")
+# 
+# name<-'Traits_Correlations_B'
+# ggsave(paste(name,".png",sep="."),width = 21, height = 15,units = "cm",dpi=600)
+# ggsave(paste(name,".pdf",sep="."),width = 21, height = 15,units = "cm",dpi=600,useDingbats=FALSE)
+```
+
+##### Figure C
+
+```{r message=FALSE, warning=FALSE}
+
+a<-corr_tr$"tr_faxes_plot"[[5]]
+b<-corr_tr$"tr_faxes_plot"[[6]]
+
+ggarrange(a,b,nrow = 1,ncol=2,align = "hv")
+
+## Export plot 
+
+# setwd("plots.dir.2")
+# 
+# name<-'Traits_Correlations_C'
+# ggsave(paste(name,".png",sep="."),width = 21, height = 15,units = "cm",dpi=600)
+# ggsave(paste(name,".pdf",sep="."),width = 21, height = 15,units = "cm",dpi=600,useDingbats=FALSE)
+```
+
+#### 9. Plot the functional space
+
+First without vertices
+
+```{r}
+big_plot <- mFD::funct.space.plot(
+  sp_faxes_coord  = sp_faxes_coord[ , c("PC1", "PC2", "PC3", "PC4")],
+  faxes           = NULL,
+  name_file       = NULL,
+  faxes_nm        = NULL,
+  range_faxes     = c(NA, NA),
+  color_bg        = NA,
+  color_pool      = "darkgray",
+  fill_pool       = "darkgray",
+  shape_pool      = 21,
+  size_pool       = 2,
+  plot_ch         = FALSE,
+  color_ch        = "black",
+  fill_ch         = "white",
+  alpha_ch        = 0.5,
+  plot_vertices   = FALSE,
+  color_vert      = "blueviolet",
+  fill_vert       = "blueviolet",
+  shape_vert      = 23,
+  size_vert       = 1,
+  plot_sp_nm      = NULL,
+  nm_size         = 3,
+  nm_color        = "black",
+  nm_fontface     = "italic",
+  check_input     = TRUE)
+
+big_plot$patchwork
+```
+
+and now with vertices
+
+```{r message=FALSE, warning=FALSE}
+
+big_plot2 <- mFD::funct.space.plot(
+  sp_faxes_coord  = sp_faxes_coord[ , c("PC1", "PC2", "PC3", "PC4")],
+  faxes           = c("PC1", "PC2", "PC3", "PC4"),
+  name_file       = NULL,
+  faxes_nm        = NULL,
+  range_faxes     = c(NA, NA),
+  color_bg        = "grey95",
+  color_pool      = "darkgreen",
+  fill_pool       = "white",
+  shape_pool      = 21,
+  size_pool       = 1,
+  plot_ch         = TRUE,
+  color_ch        = "black",
+  fill_ch         = "white",
+  alpha_ch        = 0.5,
+  plot_vertices   = TRUE,
+  color_vert      = "blueviolet",
+  fill_vert       = "blueviolet",
+  shape_vert      = 23,
+  size_vert       = 1,
+  plot_sp_nm      = NULL,
+  nm_size         = 3,
+  nm_color        = "black",
+  nm_fontface     = "plain",
+  check_input     = TRUE)
+
+# Plot the graph with all pairs of axes:
+
+big_plot2$patchwork
+
+```
+
+#### 10. Plot via pco function \[?\]
+
+```{r message=FALSE, warning=FALSE}
+
+## Try to plot via pco function in the labdsv package
+
+positions<-gow.pco$points
+colnames(positions)<-c("PCoA1","PCoA2","PCoA3","PCoA4")
+
+positions<-as_tibble(positions,rownames = "Species")%>%glimpse()
+
+## Compute arrows to plot in the PCoA 
+
+library(vegan)
+vf <- envfit(gow.pco$points[,c(1,2)],trait_dat, perm = 999)
+
+spp.scrs <- as.data.frame(vf$vectors$arrows)
+spp.scrs <- cbind(spp.scrs, Traits = rownames(spp.scrs))
+colnames(spp.scrs)<-c("PCoA1","PCoA2","Traits")
+
+## Join R2 and p-value
+
+spp.scrs$r2<-vf$vectors$r
+spp.scrs$p<-vf$vectors$pvals
+
+## Divide in two datasets for significant and not significant species
+
+spp.scrs_sig<-spp.scrs%>%filter(p<=0.05)%>%glimpse()
+spp.scrs_ns<-spp.scrs%>%filter(p>0.05)%>%glimpse()
+```
+
+```{r message=FALSE, warning=FALSE}
+
+## Obtain centroid positions for categorical traits
+
+library(tibble)
+
+spp.scrs.factors <- as.data.frame(vf$factors$centroids)
+spp.scrs.factors <- cbind(spp.scrs.factors, Traits = vf$factors$var.id)
+spp.scrs.factors<-rownames_to_column(spp.scrs.factors, var = "id")
+
+colnames(spp.scrs.factors)<-c("id","PCoA1","PCoA2","Traits")
+
+## Create a dataframe with R2 and p-values for each trait
+
+ssp.scrs.factors.test<-as.data.frame(vf$factors$r)
+ssp.scrs.factors.test$p<-as.data.frame(vf$factors$pvals)
+ssp.scrs.factors.test<-rownames_to_column(ssp.scrs.factors.test, var = "Traits")
+
+colnames(ssp.scrs.factors.test)<-c("Traits","r2","p")
+
+## Join with full dataset
+
+spp.scrs.factors<-left_join(spp.scrs.factors,ssp.scrs.factors.test,by="Traits")%>%glimpse()
+
+## Divide in two datasets for significant and not significant species
+
+spp.scrs.factors_sig<-spp.scrs.factors%>%filter(p<=0.05)%>%glimpse()
+spp.scrs.factors_ns<-spp.scrs.factors%>%filter(p>0.05)%>%glimpse()
+
+```
+
+#### 11. Create a new column with abbreviated species names
+
+```{r message=FALSE, warning=FALSE}
+
+library(fuzzySim)
+
+sp.names<-as.vector(unique(positions$Species))
+sp.codes<-spCodes(sp.names, nchar.gen = 2, nchar.sp = 3, nchar.ssp = 1, 
+                  sep.species = " ", sep.spcode = "", verbosity = 2)
+
+positions<-positions%>%
+  mutate(sp.codes=sp.codes)%>%glimpse()
+x<-c("Species","sp.codes","PCoA1","PCoA2","PCoA3","PCoA4")
+positions<-positions[,x]
+
+```
+
+#### 12. Estimate the community centroid for each site
+
+\# dat \<- invert %\>%
+
+\# rename(Abund = Total,
+
+\# id = SiteCode)
+
+```{r message=FALSE, warning=FALSE}
+
+## Averaged abundances at the Site level
+
+sum(invert$Abund) ## total number of individuals
+
+dat_avg<-invert%>%
+  filter(Abund>0)%>% # To estimate the average we remove the 0 that come from the size data
+  dplyr::group_by(SurveyID,Species)%>%
+  dplyr::summarise(number=mean(Abund),
+                  number_sd=sd(Abund))%>% #should be se
+  ungroup()%>%
+  glimpse()
+
+## Check normal histograms
+
+plot.new()
+par(mfrow=c(1,2))
+
+hist(dat_avg$number)
+hist(log10(dat_avg$number+1))
+
+## Create a species x abundances
+
+abundances<-dat_avg%>%
+  dplyr::select(SurveyID,Species,number)%>%
+  pivot_wider(names_from = "Species",values_from = number) %>%
+  mutate_all(~replace_na(., 0))%>%
+  glimpse()
+
+## Convert species to column names
+
+abundances<-as.data.frame(abundances)
+rownames(abundances) <- abundances[,1] #Assigning row names from 1st column 
+abundances[,1] <- NULL #Removing the first column
+
+## Transform species abundances
+
+abundances <- log10(abundances+1)
+
+#Order species in the community matrix in same order as traits
+
+sp.filter<-as.vector(colnames(abundances))
+trait_dat<-trait_dat[sp.filter,]
+
+x<-as.vector(row.names(trait_dat))
+abundances<-abundances[,x]
+
+## Check identical species are the same in trait and species matrix
+
+identical(rownames(trait_dat),colnames(abundances))
+
+trait_space <- sp_faxes_coord[x,c("PC1","PC2","PC3","PC4")]
+```
+
+#### 12. Cluster Analysis: define clusters of transects with similar habitats
+
+cluster.key \<- PQ_dat %\>%
+
+select(SurveyID, cluster) %\>%
+
+distinct(SurveyID, .keep_all = TRUE)
+
+```{r}
+test<-PQ_dat%>%
+  group_by(RLS_category)%>% #location, RLS_category
+  summarise(percent_cover=mean(percent_cover))%>%
+  arrange(desc(percent_cover))%>%
+  glimpse()
+
+## Define clusters of transects with similar habitat characteristics
+
+list<-as.vector(unique(test$RLS_category))
+
+test<-PQ_dat%>%
+  filter(RLS_category%in%c("Turfing algae (<2 cm high algal/sediment mat on rock)","Medium foliose brown algae",
+                           "Crustose coralline algae","Other fucoids","Bare Rock","Encrusting leathery algae"))%>%
+  group_by(SurveyID,RLS_category)%>%
+  summarise(percent_cover=mean(percent_cover))%>%
+  ungroup()%>%
+  dplyr::select(SurveyID,RLS_category,percent_cover)%>%
+  pivot_wider(names_from = "RLS_category",values_from = percent_cover) %>%
+  mutate_all(~replace_na(., 0))%>%
+  glimpse()
+
+## Create a distance matrix 
+
+dist=dist(test[,2:7])
+
+#Surveys with similar habitat compositions will have smaller Euclidean distances between them. 
+#This can help in identifying clusters or groups of surveys that have similar habitat characteristics.
+
+#Perform k-means clustering
+
+library(fpc)
+
+kmeans=pamk(dist,krange=1:(nrow(test)-1)) 
+test.2=paste(kmeans$pamobject$clustering,sep="")
+
+#Pull out vector of groups and append to realm name
+
+df=data.frame(
+  SurveyID=test$SurveyID,
+  cluster=test.2)
+
+## Append to habitat data
+
+PQ_dat<-left_join(PQ_dat,df,by="SurveyID")%>%glimpse()
+
+## Samples sizes within each habitat cluster
+
+test<-PQ_dat%>%
+  group_by(cluster)%>%
+  summarise(N=n_distinct(SurveyID))%>%
+  glimpse()
+
+## Exploratory boxplot
+
+PQ_dat$RLS_category<-as.factor(PQ_dat$RLS_category)
+levels(PQ_dat$RLS_category)
+
+clusters.plot<-ggplot(PQ_dat%>%filter(RLS_category%in%c("Turfing algae (<2 cm high algal/sediment mat on rock)","Medium foliose brown algae",
+                                                        "Crustose coralline algae","Other fucoids","Bare Rock","Encrusting leathery algae")),aes(x=cluster,y=percent_cover,fill=RLS_category))+
+  ggtitle('(a)')+
+  geom_boxplot()+
+  xlab('')+
+  ylab('Percent cover (%)')+
+  facet_wrap(~cluster,nrow = 1,scales = "free")+
+  theme_classic()
+clusters.plot
+
+# create a cluster key to identify transects as cluster1 or 2
+
+cluster.key <- PQ_dat %>%
+  select(SurveyID, cluster) %>%
+  distinct(SurveyID, .keep_all = TRUE)
+
+#check if all transects always belong to the same habitat cluster? i.e. does the survey date matter?
+
+mismatched_surveys <- cluster.key %>%
+  group_by(SurveyID) %>%
+  summarize(unique_clusters = n_distinct(cluster)) %>%
+  filter(unique_clusters > 1)
+
+print(mismatched_surveys)
+
+#we can see that there are no 'mismatched' surveys where one transect corresponds to a different cluster at different times
+
+
+```
+
+Through the cluster analysis, two clusters emerge: cluster 1, which is largely characterized by turfing aglae, and cluster 1, which is largely characterized by medium foliose brown algae.
+
+```{r message=FALSE, warning=FALSE}
+
+## Calculate the community centroid (weighthed mean trait values)
+
+library(FD)
+citation("FD")
+
+centroids<- functcomp(trait_space, as.matrix(abundances))
+
+## Convert row names to columns
+
+library(tibble)
+
+centroids<-rownames_to_column(centroids, var = "SurveyID")
+colnames(centroids)<-c("SurveyID","Trait_PCoA1","Trait_PCoA2","Trait_PCoA3","Trait_PCoA4")
+
+# ## Bring mod data and join
+
+# setwd(data.dir)
+# dir()
+
+# mod_dat<-read.csv("mod_dat.csv")%>%
+#   select(-X,-Trait_PCoA1,-Trait_PCoA2,-Trait_PCoA3,-Trait_PCoA4)%>%
+#   glimpse()
+# 
+# mod_dat<-left_join(mod_dat,centroids,by="id")%>%
+#   glimpse()
+# 
+# ## Export dataset
+# 
+# # setwd(data.dir)
+# # dir()
+# 
+# write.csv(mod_dat,"mod_dat.csv")
+
+## Compute average position (i.e. centroid) in the trait space
+
+centroids$SurveyID <- as.numeric(centroids$SurveyID)
+centroids<-left_join(centroids,cluster.key,by="SurveyID")%>%glimpse()
+
+centroids <- centroids %>%
+  filter(!is.na(cluster)) #remove transects that don't have habitat data
+
+centroids$cluster <- as.factor(centroids$cluster)
+
+centroid_avg<-centroids%>%
+  dplyr::group_by(cluster)%>% 
+  dplyr::summarise(Trait_PCoA1=mean(Trait_PCoA1),
+                   Trait_PCoA2=mean(Trait_PCoA2),
+                   Trait_PCoA3=mean(Trait_PCoA3),
+                   Trait_PCoA4=mean(Trait_PCoA4))%>%
+  glimpse()
+```
+
+#### 13. Plot multidimensional functional space
+
+```{r message=FALSE, warning=FALSE}
+
+
+Functional.space<-ggplot()+
+  ggtitle("(a)")+
+  geom_point(data=positions,aes(x=PCoA1,y=PCoA2),colour="darkgray",size=2)+
+  geom_text(data=positions,aes(x=PCoA1,y=PCoA2,label=sp.codes),colour="black",size=2,
+            vjust = 1, hjust = -0.5)+
+  geom_segment(data = spp.scrs_sig,
+               aes(x = 0, xend = PCoA1/3, y = 0, yend = PCoA2/3),
+               arrow = arrow(length = unit(0.1, "cm")), colour = "black",alpha=0.5) +
+  geom_text(data = spp.scrs_sig, aes(x = PCoA1/2, y = PCoA2/3, label = Traits),
+            size = 4,fontface="italic")+
+  geom_text(data = spp.scrs.factors_sig, aes(x = PCoA1, y = PCoA2, label = id,colour=Traits),
+            size = 4,fontface="italic")+
+  xlab('PCoA1 (29.15%)')+
+  ylab('PCoA2 (23.25%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "horizontal")
+Functional.space
+
+## Export plot 
+
+setwd("plots.dir")
+
+name<-'Fig.FD_space'
+ggsave(paste(name,".png",sep="."),width = 15, height = 10,units = "cm",dpi=600)
+ggsave(paste(name,".pdf",sep="."),width = 15, height = 10,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 14. Plot functional structure
+
+```{r message=FALSE, warning=FALSE}
+
+## Plot PcoA axes with clusters as colours and species as vectors
+
+Funct.structure<-ggplot()+
+  ggtitle("(b)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA2,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA2,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA1 (30.8%)')+
+  ylab('PCoA2 (19.8%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+Funct.structure
+
+## Export plot 
+
+setwd("plots.dir")
+
+name<-'Fig.FD_structure'
+
+ggsave(paste(name,".png",sep="."),width = 15, height = 10,units = "cm",dpi=600)
+ggsave(paste(name,".pdf",sep="."),width = 15, height = 10,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 15. Plot centroids
+
+```{r message=FALSE, warning=FALSE}
+
+Func.centroids<-ggplot()+
+  ggtitle("(c)")+
+  xlab('PCoA1 (30.8%)')+
+  ylab('PCoA2 (19.8%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(x = 0.03525290, xend = 0.07677097, y = -0.14051907, yend = -0.06240044),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+   # xlim(0.0,0.1)+
+   # ylim(-0.2,0)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA1,y=Trait_PCoA2, color=cluster, shape=cluster),size=3)+ 
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none")
+Func.centroids
+
+## Export plot 
+
+# setwd("plots.dir.2")
+# name<-'Fig.FD_centroids'
+# ggsave(paste(name,".png",sep="."),width = 15, height = 10,units = "cm",dpi=600)
+# ggsave(paste(name,".pdf",sep="."),width = 15, height = 10,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 16. Plot changes in the functional structure
+
+```{r message=FALSE, warning=FALSE}
+
+### Supplementary plot on changes in the functional structure ----
+
+PC1.PC3<-ggplot()+
+  ggtitle("(a)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA3,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA3,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA1 (30.8%)')+
+  ylab('PCoA3 (12.9%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+PC1.PC3
+
+PC1.PC4<-ggplot()+
+  ggtitle("(b)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA4,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA1,y=Trait_PCoA4,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA1 (30.8%)')+
+  ylab('PCoA4 (10.6%)')+
+  theme_classic()+
+#  Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+PC1.PC4
+
+PC2.PC3<-ggplot()+
+  ggtitle("(c)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA2,y=Trait_PCoA3,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA2,y=Trait_PCoA3,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA2 (19.8%)')+
+  ylab('PCoA3(12.9%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+PC2.PC3
+
+PC2.PC4<-ggplot()+
+  ggtitle("(d)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA2,y=Trait_PCoA4,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA2,y=Trait_PCoA4,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA2 (19.8%)')+
+  ylab('PCoA4(10.6%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+PC2.PC4
+
+PC3.PC4<-ggplot()+
+  ggtitle("(e)")+
+  stat_ellipse(data=centroids,aes(x=Trait_PCoA3,y=Trait_PCoA4,fill=cluster),geom="polygon",alpha=0.25)+
+  geom_point(data=centroids,aes(x=Trait_PCoA3,y=Trait_PCoA4,colour=cluster,shape=cluster),size=2)+
+  coord_fixed() + ## need aspect ratio of 1!
+  scale_colour_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                      values=c("pink3","green3","dodgerblue"))+
+  scale_fill_manual(#labels=c("Fajana_T1","Fajana_T2"),
+                    values=c("pink3","green3","dodgerblue"))+
+  xlab('PCoA3 (12.9%)')+
+  ylab('PCoA4(10.6%)')+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none",
+        legend.direction = "none")
+PC3.PC4
+
+ggarrange(PC1.PC3,PC1.PC4,PC2.PC3,PC2.PC4,PC3.PC4,align = "hv")
+
+## Export plot 
+
+setwd("plots.dir.2")
+
+name<-'FigSX_Functional_structure'
+ggsave(paste(name,".png",sep="."),width = 21, height = 15,units = "cm",dpi=600)
+ggsave(paste(name,".pdf",sep="."),width = 21, height = 15,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 17. Plot changes in functional composition (centroids) 
+
+```{r message=FALSE, warning=FALSE}
+
+PC1.PC3<-ggplot()+
+  ggtitle("(a)")+
+  xlab('PCoA1 (29.15%)')+
+  ylab('PCoA3 (15.79%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(x = 0.03525290, xend = 0.07677097, y = 0.07550777, yend = 0.05571140),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+  xlim(0.0,0.15)+
+  ylim(-0.05,0.1)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA1,y=Trait_PCoA3,colour=cluster,shape=cluster),size=3)+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none")
+PC1.PC3
+
+PC1.PC4<-ggplot()+
+  ggtitle("(b)")+
+  xlab('PCoA1 (29.15%)')+
+  ylab('PCoA4 (13.12%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(x = 0.03525290, xend = 0.07677097, y = -0.04049502, yend = -0.03390862),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+  xlim(0.0,0.15)+
+  ylim(-0.05,0.1)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA1,y=Trait_PCoA4,colour=cluster,shape=cluster),size=3)+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none")
+PC1.PC4
+
+PC2.PC3<-ggplot()+
+  ggtitle("(c)")+
+  xlab('PCoA2 (23.25%)')+
+  ylab('PCoA3(15.79%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(x = -0.14051907, xend = -0.06240044, y = 0.07550777, yend = 0.05571140),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+  xlim(-0.15,0.15)+
+  ylim(-0.5,0.1)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA2,y=Trait_PCoA3,colour=cluster,shape=cluster),size=3)+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none")
+PC2.PC3
+
+PC2.PC4<-ggplot()+
+  ggtitle("(d)")+
+  xlab('PCoA2 (23.25%)')+
+  ylab('PCoA4(13.12%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(x = -0.14051907, xend = -0.06240044, y = -0.04049502, yend = -0.03390862),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+  xlim(-0.15,0.15)+
+  ylim(-0.05,0.1)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA2,y=Trait_PCoA4,colour=cluster,shape=cluster),size=3)+
+  theme_classic()+
+ # Theme1+
+  theme(legend.position = "none")
+PC2.PC4
+
+PC3.PC4<-ggplot()+
+  ggtitle("(e)")+
+  xlab('PCoA3 (15.79%)')+
+  ylab('PCoA4(13.12%)')+
+  # geom_segment(data = centroid_avg,
+  #              aes(0.07550777, xend = 0.05571140,y = -0.04049502, yend = -0.03390862),
+  #              arrow = arrow(length = unit(0.25, "cm")), colour = "black") +
+  xlim(0.0,0.15)+
+  ylim(-0.05,0.1)+
+  geom_point(data=centroid_avg,aes(x=Trait_PCoA3,y=Trait_PCoA4,colour=cluster,shape=cluster),size=3)+
+  theme_classic()+
+  #Theme1+
+  theme(legend.position = "none")
+PC3.PC4
+
+## Arrange plots in a grob
+
+ggarrange(PC1.PC3,PC1.PC4,PC2.PC3,PC2.PC4,PC3.PC4,align = "hv")
+
+## Export plot 
+
+setwd("plots.dir.2")
+
+name<-'FigSX_Functional_centroids'
+ggsave(paste(name,".png",sep="."),width = 21, height = 15,units = "cm",dpi=600)
+ggsave(paste(name,".pdf",sep="."),width = 21, height = 15,units = "cm",dpi=600,useDingbats=FALSE)
+
+```
+
+#### 18. Extract community weighted mean trait values (CWM)
+
+```{r}
+## Extract community weighted mean trait values (CWM) for each trait ----
+
+
+# CWM_traits<-functcomp(trait_dat, as.matrix(abundances),CWM.type="all") %>%
+#   glimpse()
+# 
+# ## Convert row names to columns and export
+# 
+# CWM_traits<-rownames_to_column(CWM_traits, var = "id") %>%
+#   glimpse()
+
+#write.csv(CWM_traits,"CWM_traits.csv")
+```
+
+#### 19. Compute functional diversity indices
+
+First, set up the assemblage
+
+```{r}
+invert<-left_join(invert,cluster.key,by="SurveyID")%>%glimpse()
+
+assemblage <- invert %>%
+  group_by(cluster, Species) %>%
+  summarize(Cluster.Total = sum(Abund))
+
+library(reshape2)
+assemblage <- dcast(assemblage, cluster ~ Species, value.var = "Cluster.Total")
+
+assemblage[is.na(assemblage)] <- 0 #make NA values 0
+
+rownames(assemblage) <- assemblage[,1] #Assigning row names from 1st column 
+assemblage[,1] <- NULL #Remove the first column
+rownames(assemblage) <- c("cluster1", "cluster2")
+
+assemblage <- data.matrix(assemblage)
+
+head(assemblage)
+```
+
+```{r}
+
+alpha_fd_indices <- mFD::alpha.fd.multidim(
+  sp_faxes_coord   = sp_faxes_coord[ , c("PC1", "PC2", "PC3", "PC4")],
+  asb_sp_w         = assemblage,
+  ind_vect         = c("fdis", "fmpd", "fnnd", "feve", "fric", "fdiv", "fori", 
+                       "fspe", "fide"),
+  scaling          = TRUE,
+  check_input      = TRUE,
+  details_returned = TRUE)
+```
+
+```{r}
+fd_ind_values <- alpha_fd_indices$"functional_diversity_indices"
+fd_ind_values
+
+
+details_list <- alpha_fd_indices$"details"
+```
+
+#### Generate plots
+
+```{r}
+plots_alpha <- mFD::alpha.multidim.plot(
+  output_alpha_fd_multidim = alpha_fd_indices,
+  plot_asb_nm              = c("cluster1", "cluster2"),
+  ind_nm                   = c("fdis", "fide", "fnnd", "feve", "fric", 
+                               "fdiv", "fori", "fspe"),
+  faxes                    = NULL,
+  faxes_nm                 = NULL,
+  range_faxes              = c(NA, NA),
+  color_bg                 = "grey95",
+  shape_sp                 = c(pool = 3, asb1 = 21, asb2 = 21),
+  size_sp                  = c(pool = 0.7, asb1 = 1, asb2 = 1),
+  color_sp                 = c(pool = "grey50", asb1 = "darkgreen", asb2 = "pink2"),
+  color_vert               = c(pool = "grey50", asb1 = "darkgreen", asb2 = "pink2"),
+  fill_sp                  = c(pool = NA, asb1 = "darkgreen", asb2 = "pink2"),
+  fill_vert                = c(pool = NA, asb1 = "darkgreen", asb2 = "pink2"),
+  color_ch                 = c(pool = NA, asb1 = "darkgreen", asb2 = "pink2"),
+  fill_ch                  = c(pool = "white", asb1 = "darkgreen", asb2 = "pink2"),
+  alpha_ch                 = c(pool = 1, asb1 = 0.3, asb2 = 0.3),
+  shape_centroid_fdis      = c(asb1 = 22,  asb2 = 24),
+  shape_centroid_fdiv      = c(asb1 = 22,  asb2 = 24),
+  shape_centroid_fspe      = 23,
+  color_centroid_fspe      = "black",
+  size_sp_nm               = 3, 
+  color_sp_nm              = "black",
+  plot_sp_nm               = NULL,
+  fontface_sp_nm           = "plain",
+  save_file                = FALSE,
+  check_input              = TRUE) 
+```
+
+```{r}
+plots_alpha$"fric"$"patchwork"
+```
+
+```{r}
+plots_alpha$"fdiv"$"patchwork" #functional divergence
+```
+
+```{r}
+plots_alpha$"fori"$"patchwork" #functional originality
+```
+
+```{r}
+plots_alpha$"fspe"$"patchwork" #functional specialization 
+```
+
+```{r}
+plots_alpha$"fdis"$"patchwork"
+```
+
+```{r}
+plots_alpha$"fide"$"patchwork"
+```
+
+```{r}
+plots_alpha$"fnnd"$"patchwork"
+```
